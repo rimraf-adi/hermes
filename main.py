@@ -1,73 +1,79 @@
-import asyncio
-import os
-from dotenv import load_dotenv
-from agents import Runner,handoff
-from agents_mcp import Agent, RunnerContext
-from openai import OpenAI
-from pydantic import BaseModel
-from agents import set_tracing_export_api_key, RunContextWrapper
-load_dotenv()
+from prompt_toolkit import Application
+from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.layout import Layout, HSplit, Window
+from prompt_toolkit.layout.controls import BufferControl
+from prompt_toolkit.layout.margins import NumberedMargin
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.widgets import TextArea
+from prompt_toolkit.styles import Style
+import sys
 
-api_key=os.getenv("OPENAI_API_KEY")
-set_tracing_export_api_key(api_key=api_key)
-
-mcp_config_path = "mcp_agent.config.yaml"
-context = RunnerContext(mcp_config_path=mcp_config_path)
-
-class CityData(BaseModel):
-   places: str
-   
-async def process_citydata(ctx: RunContextWrapper, input_data: CityData):
-   print(f"citydata: {input_data.places}")
-   
-
-itineraryagent = Agent(
-        name="CityInfoAgent",
-        instructions="Basis the input given and considering all factors given by the user, please give the names of the places that can be visited. Do not elaborate the itinerary"
-    )
-
-locationagent = Agent(
-        name='Location Agent',
-        instructions="Give the distance between the places suggested. For example, if the place auggested are A, B, C, then give the distance of B from A and then C from B",
-        # handoffs=[handoff(agent=cityagent, on_handoff=process_citydata, input_type=CityData)]
-    )
-
-synthesizer_agent = Agent(
-    name="synthesizer_agent",
-    instructions="You take the input and then build the complete itinerary around it",
-)
-
-async def main():
+def editor_app(filename=None):
     
-    travel_info = {
-        "destination": input("Where would you like to travel? "),
-        "duration": input("How long would you like to stay? "),
-        "month": input("What month are you travelling in? "),
-        "experience": input("What kind of experience are you looking for? "),
-        "travellers": input("Who are you travelling with? "),
-        "priority": input("Are there some must see places that you want to go to? ")
-    }
+    text = ""
+    if filename:
+        try:
+            with open(filename, "r") as f:
+                text = f.read()
+        except FileNotFoundError:
+            pass
 
-    raw_info = "\n".join(f"{k}: {v}" for k, v in travel_info.items())
-
-    first_result = await Runner.run(
-        itineraryagent,raw_info
+    # Main editing area
+    textarea = TextArea(
+        text=text,
+        multiline=True,
+        line_numbers=True,
+        wrap_lines=False,
     )
 
-    # print(first_result.final_output)
-    
-    second_result = await Runner.run(
-        locationagent, first_result.final_output, context=context
+    # Status bar
+    status = TextArea(
+        text=f" -- INSERT -- | {filename or '[No Name]'} ",
+        style="class:status",
+        height=1,
+        multiline=False,
+        wrap_lines=False,
+        focusable=False
     )
 
-    # print(second_result.final_output)
+    # Key bindings
+    kb = KeyBindings()
 
-    third_result = await Runner.run(
-        synthesizer_agent, second_result.final_output
+    @kb.add("c-p")  # Ctrl-S = save
+    def save_file(event):
+        if filename:
+            with open(filename, "w") as f:
+                f.write(textarea.text)
+            status.text = f" Saved {filename} "
+        else:
+            status.text = " No filename provided "
+
+    @kb.add("c-q")  # Ctrl-Q = quit
+    def quit_app(event):
+        event.app.exit()
+
+    # Layout
+    root_container = HSplit([
+        textarea,
+        status
+    ])
+
+    layout = Layout(root_container)
+
+    style = Style.from_dict({
+        "status": "reverse",
+    })
+
+    # Application
+    return Application(
+        layout=layout,
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=True,
+        style=style
     )
-
-    print(third_result.final_output)
-
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    filename = sys.argv[1] if len(sys.argv) > 1 else None
+    app = editor_app(filename)
+    app.run()
